@@ -48,6 +48,19 @@ const lastBlock = tx => ({
   toBlock: tx.receipt.blockNumber
 });
 
+/**
+ * Get the deploy gas cost of a contract instance
+ * @param {object} contractInstance
+ */
+async function getContractDeployGas(contractInstance) {
+  if (!contractInstance.transactionHash) return "No txHash";
+  const receipt = await web3.eth.getTransactionReceipt(
+    contractInstance.transactionHash
+  );
+  if (!receipt) return "No receipt";
+  return receipt.gasUsed;
+}
+
 contract("FundsForwarder", accounts => {
   // Accounts
   const bossAccount = accounts[0];
@@ -72,6 +85,7 @@ contract("FundsForwarder", accounts => {
   let fundsForwarderFactory;
   let fundsForwarder;
   let erc20;
+  let gasData = {};
 
   // Giveth bridge params
   // - Shared
@@ -103,6 +117,9 @@ contract("FundsForwarder", accounts => {
       escapeHatchCaller,
       escapeHatchDestination
     );
+    gasData["Deploy FundsForwarderFactory"] = await getContractDeployGas(
+      fundsForwarderFactory
+    );
   });
 
   it(`campaignManager should deploy FundsForwarder via the factory`, async () => {
@@ -111,6 +128,7 @@ contract("FundsForwarder", accounts => {
       receiverId,
       { from: campaignManagerAccount }
     );
+    gasData["Deploy FundForwarder"] = tx.receipt.gasUsed;
 
     const newFundForwarder = getEvent(tx.logs, "NewFundForwarder");
     fundsForwarder = await FundsForwarder.at(
@@ -156,7 +174,7 @@ contract("FundsForwarder", accounts => {
       const tx = await fundsForwarder.forward(zeroAddress, {
         from: claimerAccount
       });
-      console.log(`Forwarded ETH txHash: ${tx.tx}`);
+      gasData["Forward ETH tx"] = tx.receipt.gasUsed;
       const forwarded = getEvent(tx.logs, "Forwarded");
       assert.equal(
         forwarded.args.balance.toString(),
@@ -229,6 +247,7 @@ contract("FundsForwarder", accounts => {
       const tx = await fundsForwarder.forward(erc20.address, {
         from: claimerAccount
       });
+      gasData["Forward Tokens tx"] = tx.receipt.gasUsed;
       const forwarded = getEvent(tx.logs, "Forwarded");
       assert.equal(
         forwarded.args.balance.toString(),
@@ -259,6 +278,10 @@ contract("FundsForwarder", accounts => {
         "Wrong event Donate arguments"
       );
     });
+  });
+
+  after("Get gas data", async () => {
+    console.log(gasData);
   });
 
   // it(`Should disable the hashtag and retrieve it`, async () => {
