@@ -7,8 +7,6 @@ import "./lib/Autopetrified.sol";
 import "./FundsForwarderFactory.sol";
 
 interface IGivethBridge {
-    function donateAndCreateGiver(address giver, uint64 receiverId) external payable;
-    function donateAndCreateGiver(address giver, uint64 receiverId, address token, uint _amount) external payable;
     function donate(uint64 giverId, uint64 receiverId) external payable;
     function donate(uint64 giverId, uint64 receiverId, address token, uint _amount) external payable;
 }
@@ -41,8 +39,7 @@ contract FundsForwarder {
     function() public payable {}
 
     /**
-    * @dev Initialize can only be called once. It saves the block number in which it was initialized.
-    *
+    * @dev Initialize can only be called once.
     * @param _fundsForwarderFactory Contract address of the fundsForwarderFactory
     *  This address should be a contract with three public getters:
     *  - bridge(): Returns the bridge address
@@ -60,6 +57,7 @@ contract FundsForwarder {
         /// @dev onlyInit method from AragonOS's Initializable contract
         require(fundsForwarderFactory == address(0), ERROR_ALREADY_INITIALIZED);
         /// @dev Setting fundsForwarderFactory, serves as calling initialized()
+        require(_fundsForwarderFactory != address(0));
         fundsForwarderFactory = FundsForwarderFactory(_fundsForwarderFactory);
         /// @dev Make sure that the fundsForwarderFactory is a contact and has a bridge method
         require(fundsForwarderFactory.bridge() != address(0), ERROR_BRIDGE_CALL);
@@ -108,19 +106,22 @@ contract FundsForwarder {
     }
 
     /**
-    * @notice Send funds to recovery Vault. This contract should never receive funds,
-    *         but in case it does, this function allows one to recover them.
+    * @notice Send funds to recovery address (escapeHatchDestination).
+    * The `escapeHatch()` should only be called as a last resort if a
+    * security issue is uncovered or something unexpected happened
     * @param _token Token balance to be sent to recovery vault.
     *
+    * @dev Only the escapeHatchCaller can trigger this function
+    * @dev The escapeHatchCaller address must not have control over escapeHatchDestination
     * @dev Function extracted from the Escapable contract (by Jordi Baylina and Adrià Massanet)
     * Instead of storing the caller, destination and owner addresses,
     * it fetches them from the parent contract.
     */
     function escapeHatch(address _token) public {
-        address escapeHatchCaller = fundsForwarderFactory.escapeHatchCaller();
-        address escapeHatchDestination = fundsForwarderFactory.escapeHatchDestination();
+        /// @dev Serves as the original contract's onlyEscapeHatchCaller
+        require(msg.sender == fundsForwarderFactory.escapeHatchCaller(), ERROR_DISALLOWED);
 
-        require(msg.sender == escapeHatchCaller, ERROR_DISALLOWED);
+        address escapeHatchDestination = fundsForwarderFactory.escapeHatchDestination();
 
         uint256 balance;
         if (_token == 0x0) {

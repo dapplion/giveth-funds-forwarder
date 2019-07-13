@@ -9,6 +9,10 @@ contract FundsForwarderFactory is Escapable, IsContract {
     address public bridge;
     address public childImplementation;
 
+    string private constant ERROR_NOT_A_CONTRACT = "ERROR_NOT_A_CONTRACT";
+    string private constant ERROR_HATCH_CALLER = "ERROR_HATCH_CALLER";
+    string private constant ERROR_HATCH_DESTINATION = "ERROR_HATCH_DESTINATION";
+
     event NewFundForwarder(address indexed _giver, uint64 indexed _receiverId, address fundsForwarder);
     event BridgeChanged(address newBridge);
     event ChildImplementationChanged(address newChildImplementation);
@@ -16,26 +20,26 @@ contract FundsForwarderFactory is Escapable, IsContract {
     /**
     * @notice Create a new factory for deploying Giveth FundForwarders
     * @dev Requires a deployed bridge
-    * @param _bridge Base factory for deploying DAOs
+    * @param _bridge Bridge address
     * @param _escapeHatchCaller The address of a trusted account or contract to
     *  call `escapeHatch()` to send the ether in this contract to the
     *  `escapeHatchDestination` it would be ideal if `escapeHatchCaller` cannot move
     *  funds out of `escapeHatchDestination`
-    * @param _escapeHatchDestination The address of a safe location (usu a
-    *  Multisig) to send the ether held in this contract in an emergency
+    * @param _escapeHatchDestination The address of a safe location (usually a
+    *  Multisig) to send the value held in this contract in an emergency
     */
     constructor(
         address _bridge,
         address _escapeHatchCaller,
         address _escapeHatchDestination
     ) Escapable(_escapeHatchCaller, _escapeHatchDestination) public {
-        require(isContract(_bridge), "MUST BE CONTRACT");
+        require(isContract(_bridge), ERROR_NOT_A_CONTRACT);
         bridge = _bridge;
 
         // Set the escapeHatch params to the same as in the bridge
         Escapable bridgeInstance = Escapable(_bridge);
-        require(_escapeHatchCaller == bridgeInstance.escapeHatchCaller(), "WRONG escapeHatchCaller");
-        require(_escapeHatchDestination == bridgeInstance.escapeHatchDestination(), "WRONG escapeHatchDestination");
+        require(_escapeHatchCaller == bridgeInstance.escapeHatchCaller(), ERROR_HATCH_CALLER);
+        require(_escapeHatchDestination == bridgeInstance.escapeHatchDestination(), ERROR_HATCH_DESTINATION);
     }
 
     /**
