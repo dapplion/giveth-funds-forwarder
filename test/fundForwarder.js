@@ -67,11 +67,13 @@ contract("FundsForwarder", accounts => {
   const campaignManagerAccount = accounts[1];
   const donorAccount = accounts[2];
   const claimerAccount = accounts[3];
+  const safeVaultAccount = accounts[9];
   console.log({
     bossAccount,
     campaignManagerAccount,
     donorAccount,
-    claimerAccount
+    claimerAccount,
+    safeVaultAccount
   });
 
   /**
@@ -90,7 +92,7 @@ contract("FundsForwarder", accounts => {
   // Giveth bridge params
   // - Shared
   const escapeHatchCaller = bossAccount;
-  const escapeHatchDestination = bossAccount;
+  const escapeHatchDestination = safeVaultAccount;
   // - Dedicated
   const securityGuard = bossAccount;
   const absoluteMinTimeLock = 60 * 60 * 25;
@@ -103,22 +105,66 @@ contract("FundsForwarder", accounts => {
   const donationValueBn = toBN(donationValue);
   const zeroAddress = "0x0000000000000000000000000000000000000000";
 
-  before("Deploy Giveth bridge and FundsForwarderFactory", async () => {
-    bridge = await GivethBridge.new(
-      escapeHatchCaller,
-      escapeHatchDestination,
-      absoluteMinTimeLock,
-      timeLock,
-      securityGuard,
-      maxSecurityGuardDelay
+  before(
+    "Deploy Giveth bridge, FundsForwarderFactory and FundsForwarder logic",
+    async () => {
+      // Bridge deployment
+      bridge = await GivethBridge.new(
+        escapeHatchCaller,
+        escapeHatchDestination,
+        absoluteMinTimeLock,
+        timeLock,
+        securityGuard,
+        maxSecurityGuardDelay
+      );
+
+      // FundsForwarderFactory deployment
+      fundsForwarderFactory = await FundsForwarderFactory.new(
+        bridge.address,
+        escapeHatchCaller,
+        escapeHatchDestination
+      );
+
+      // FundsForwarder logic deployment
+      fundsForwarderLogic = await FundsForwarder.new();
+      // Set child implementation in the FundsForwarderFactory
+      await fundsForwarderFactory.changeChildImplementation(
+        fundsForwarderLogic.address
+      );
+
+      gasData["Deploy FundsForwarderFactory"] = await getContractDeployGas(
+        fundsForwarderFactory
+      );
+      gasData["Deploy FundsForwarder logic"] = await getContractDeployGas(
+        fundsForwarderLogic
+      );
+    }
+  );
+
+  it(`fundsForwarderLogic should be petrified`, async () => {
+    const fundsForwarderFactoryAddress = await fundsForwarderLogic.fundsForwarderFactory();
+    assert.equal(
+      fundsForwarderFactoryAddress.toLowerCase(),
+      "0xffffffffffffffffffffffffffffffffffffffff",
+      "Should be petrified"
     );
-    fundsForwarderFactory = await FundsForwarderFactory.new(
-      bridge.address,
-      escapeHatchCaller,
-      escapeHatchDestination
-    );
-    gasData["Deploy FundsForwarderFactory"] = await getContractDeployGas(
-      fundsForwarderFactory
+  });
+
+  it(`fundsForwarderLogic should not be able to be initialized`, async () => {
+    let errorMessage;
+    try {
+      await fundsForwarderLogic.initialize(
+        fundsForwarderFactory.address,
+        giverId,
+        receiverId
+      );
+    } catch (e) {
+      errorMessage = e.message;
+    }
+    assert.equal(
+      errorMessage,
+      "Returned error: VM Exception while processing transaction: revert INIT_ALREADY_INITIALIZED -- Reason given: INIT_ALREADY_INITIALIZED.",
+      "Wrong error message"
     );
   });
 
@@ -140,13 +186,23 @@ contract("FundsForwarder", accounts => {
     const _giverId = await fundsForwarder.giverId();
     assert.equal(_receiverId, receiverId, "Wrong receiverId");
     assert.equal(_giverId, giverId, "Wrong giverId");
+  });
 
-    // Check that the permissions are correct
-    const fundsForwarderOwner = await fundsForwarder.owner();
+  it(`fundsForwarder should not be able to be initialized twice`, async () => {
+    let errorMessage;
+    try {
+      await fundsForwarder.initialize(
+        fundsForwarderFactory.address,
+        giverId,
+        receiverId
+      );
+    } catch (e) {
+      errorMessage = e.message;
+    }
     assert.equal(
-      fundsForwarderOwner,
-      bossAccount,
-      "Owner of fundsForwarder should be the boss"
+      errorMessage,
+      "Returned error: VM Exception while processing transaction: revert INIT_ALREADY_INITIALIZED -- Reason given: INIT_ALREADY_INITIALIZED.",
+      "Wrong error message"
     );
   });
 
@@ -232,7 +288,6 @@ contract("FundsForwarder", accounts => {
       const tx = await erc20.transfer(fundsForwarder.address, donationValue, {
         from: donorAccount
       });
-      console.log(`txHash: ${tx.tx}`);
 
       const balDonorDiff = await balanceDonor();
       const balFundFDiff = await balanceFundF();
@@ -280,36 +335,82 @@ contract("FundsForwarder", accounts => {
     });
   });
 
+  /**
+   * Recovery of ETH via escapeHatch
+   */
+
+  describe("Funds recovery via escape hatch", () => {
+    before(`Assert the the escapeHatch accounts are correct`, async () => {
+      assert.equal(
+        await fundsForwarderFactory.escapeHatchCaller(),
+        escapeHatchCaller,
+        "Wrong escapeHatchCaller"
+      );
+      assert.equal(
+        await fundsForwarderFactory.escapeHatchDestination(),
+        escapeHatchDestination,
+        "Wrong escapeHatchDestination"
+      );
+    });
+
+    it(`Should recover ETH from the fundsForwarder`, async () => {
+      const balanceVault = await compareBalance(escapeHatchDestination);
+      const balanceFundF = await compareBalance(fundsForwarder.address);
+
+      await fundsForwarder.send(donationValue, {
+        from: donorAccount
+      });
+
+      const balFundFDiff = await balanceFundF();
+      assert.equal(balFundFDiff, donationValue, "Wrong fund f. balance");
+
+      await fundsForwarder.escapeHatch(zeroAddress, {
+        from: bossAccount
+      });
+
+      const balVaultDiff = await balanceVault();
+      assert.equal(balVaultDiff, donationValue, "Wrong vault balance");
+    });
+
+    it(`Should recover tokens from the fundsForwarder`, async () => {
+      await erc20.mint(donorAccount, donationValue);
+
+      const balanceVault = await compareBalance(escapeHatchDestination, erc20);
+      const balanceFundF = await compareBalance(fundsForwarder.address, erc20);
+
+      await erc20.transfer(fundsForwarder.address, donationValue, {
+        from: donorAccount
+      });
+
+      const balFundFDiff = await balanceFundF();
+      assert.equal(balFundFDiff, donationValue, "Wrong fund f. balance");
+
+      await fundsForwarder.escapeHatch(erc20.address, {
+        from: bossAccount
+      });
+
+      const balVaultDiff = await balanceVault();
+      assert.equal(balVaultDiff, donationValue, "Wrong vault balance");
+    });
+
+    it(`Should not allow recover tokens to non escapeHatchCaller`, async () => {
+      let errorMessage = "---did not throw---";
+      try {
+        await fundsForwarder.escapeHatch(zeroAddress, {
+          from: donorAccount
+        });
+      } catch (e) {
+        errorMessage = e.message;
+      }
+      assert.equal(
+        errorMessage,
+        "Returned error: VM Exception while processing transaction: revert RECOVER_DISALLOWED -- Reason given: RECOVER_DISALLOWED.",
+        "Wrong error message"
+      );
+    });
+  });
+
   after("Get gas data", async () => {
     console.log(gasData);
   });
-
-  // it(`Should disable the hashtag and retrieve it`, async () => {
-  //   const statusBefore = await hashtagList.hashtagsStatus(hashtagAddress);
-  //   await hashtagList.disableHashtag(hashtagAddress);
-  //   const statusAfter = await hashtagList.hashtagsStatus(hashtagAddress);
-  //   assert.equal(HashtagStatus[statusBefore], "Enabled");
-  //   assert.equal(HashtagStatus[statusAfter], "Disabled");
-  // });
-
-  // it(`Should enable the hashtag and retrieve it`, async () => {
-  //   const statusBefore = await hashtagList.hashtagsStatus(hashtagAddress);
-  //   await hashtagList.enableHashtag(hashtagAddress);
-  //   const statusAfter = await hashtagList.hashtagsStatus(hashtagAddress);
-  //   assert.equal(HashtagStatus[statusBefore], "Disabled");
-  //   assert.equal(HashtagStatus[statusAfter], "Enabled");
-  // });
-
-  // it(`Should retrieve the hashtags using the array and mapping`, async () => {
-  //   const hashtags = await hashtagList.getHashtags();
-  //   const enabled = await hashtagList.hashtagsStatus(hashtags[0]);
-  //   assert.equal(Array.isArray(hashtags), true);
-  //   assert.equal(hashtags.length, 1);
-  //   assert.equal(enabled, 1);
-  // });
-
-  //   // Print gas used in console to know how expensive is each action
-  //   after(function() {
-  //     console.log({ hashtagListAddress: hashtagList.address, hashtagAddress });
-  //   });
 });

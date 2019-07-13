@@ -7,12 +7,11 @@ import "./lib/Escapable.sol";
 
 contract FundsForwarderFactory is Escapable, IsContract {
     address public bridge;
-    address public escapeHatchCaller;
-    address public escapeHatchDestination;
-
-    mapping (uint64 => address) public fundsForwarders;
+    address public childImplementation;
 
     event NewFundForwarder(address indexed _giver, uint64 indexed _receiverId, address fundsForwarder);
+    event BridgeChanged(address newBridge);
+    event ChildImplementationChanged(address newChildImplementation);
 
     /**
     * @notice Create a new factory for deploying Giveth FundForwarders
@@ -45,6 +44,16 @@ contract FundsForwarderFactory is Escapable, IsContract {
     */
     function changeBridge(address _bridge) external onlyEscapeHatchCallerOrOwner {
         bridge = _bridge;
+        emit BridgeChanged(_bridge);
+    }
+
+    /**
+    * @notice Change the childImplementation address.
+    * @param _childImplementation New childImplementation address
+    */
+    function changeChildImplementation(address _childImplementation) external onlyEscapeHatchCallerOrOwner {
+        childImplementation = _childImplementation;
+        emit ChildImplementationChanged(_childImplementation);
     }
 
     /**
@@ -52,19 +61,26 @@ contract FundsForwarderFactory is Escapable, IsContract {
     * @param _receiverId The adminId of the liquidPledging pledge admin receiving the donation
     */
     function newFundsForwarder(uint64 _giverId, uint64 _receiverId) public {
-        address fundsForwarder = new FundsForwarder(
-            address(this),
-            _giverId,
-            _receiverId,
-            escapeHatchCaller,
-            escapeHatchDestination
-        );
-        fundsForwarders[_receiverId] = fundsForwarder;
-
-        // Set the owner of the fundForwarder to this contract's owner
-        Owned(fundsForwarder).changeOwnership(owner);
+        address fundsForwarder = _deployMinimal(childImplementation);
+        FundsForwarder(fundsForwarder).initialize(address(this), _giverId, _receiverId);
 
         // Store a registry of fundForwarders as events
         emit NewFundForwarder(_giverId, _receiverId, fundsForwarder);
+    }
+
+    /**
+     * @notice Deploys a minimal forwarding proxy that is not upgradable
+     * From ZepelinOS https://github.com/zeppelinos/zos/blob/v2.4.0/packages/lib/contracts/upgradeability/ProxyFactory.sol
+     */
+    function _deployMinimal(address _logic) internal returns (address proxy) {
+        // Adapted from https://github.com/optionality/clone-factory/blob/32782f82dfc5a00d103a7e61a17a5dedbd1e8e9d/contracts/CloneFactory.sol
+        bytes20 targetBytes = bytes20(_logic);
+        assembly {
+            let clone := mload(0x40)
+            mstore(clone, 0x3d602d80600a3d3981f3363d3d373d3d3d363d73000000000000000000000000)
+            mstore(add(clone, 0x14), targetBytes)
+            mstore(add(clone, 0x28), 0x5af43d82803e903d91602b57fd5bf30000000000000000000000000000000000)
+            proxy := create(0, clone, 0x37)
+        }
     }
 }
