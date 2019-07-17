@@ -3,6 +3,7 @@ const FundsForwarderFactory = artifacts.require("FundsForwarderFactory");
 const FundsForwarder = artifacts.require("FundsForwarder");
 const GivethBridge = artifacts.require("GivethBridge");
 const ERC20Insecure = artifacts.require("ERC20Insecure");
+const InsecureDaiToken = artifacts.require("InsecureDSToken");
 const assert = require("assert");
 const { BN, toBN } = web3.utils;
 
@@ -87,6 +88,7 @@ contract("FundsForwarder", accounts => {
   let fundsForwarderFactory;
   let fundsForwarder;
   let erc20;
+  let dai;
   let gasData = {};
 
   // Giveth bridge params
@@ -104,6 +106,9 @@ contract("FundsForwarder", accounts => {
   const donationValue = web3.utils.toWei("0.1", "ether");
   const donationValueBn = toBN(donationValue);
   const zeroAddress = "0x0000000000000000000000000000000000000000";
+  const maxValue = toBN(2)
+    .pow(toBN(255))
+    .toString();
 
   before(
     "Deploy Giveth bridge, FundsForwarderFactory and FundsForwarder logic",
@@ -153,11 +158,7 @@ contract("FundsForwarder", accounts => {
   it(`fundsForwarderLogic should not be able to be initialized`, async () => {
     let errorMessage;
     try {
-      await fundsForwarderLogic.initialize(
-        fundsForwarderFactory.address,
-        giverId,
-        receiverId
-      );
+      await fundsForwarderLogic.initialize(giverId, receiverId);
     } catch (e) {
       errorMessage = e.message;
     }
@@ -191,11 +192,7 @@ contract("FundsForwarder", accounts => {
   it(`fundsForwarder should not be able to be initialized twice`, async () => {
     let errorMessage;
     try {
-      await fundsForwarder.initialize(
-        fundsForwarderFactory.address,
-        giverId,
-        receiverId
-      );
+      await fundsForwarder.initialize(giverId, receiverId);
     } catch (e) {
       errorMessage = e.message;
     }
@@ -270,14 +267,12 @@ contract("FundsForwarder", accounts => {
   describe("ERC20 token donation", () => {
     before("Deploy ERC20, mint and whitelist in the bridge", async () => {
       erc20 = await ERC20Insecure.new();
-      await erc20.mint(donorAccount, donationValue);
+      await erc20.mint(donorAccount, maxValue);
       const balance = await erc20
         .balanceOf(donorAccount)
         .then(b => b.toString());
-      if (balance !== donationValue)
-        throw Error(
-          `Wrong donor minted balance ${balance} == ${donationValue}`
-        );
+      if (balance !== maxValue)
+        throw Error(`Wrong donor minted balance ${balance} == ${maxValue}`);
       await bridge.whitelistToken(erc20.address, true);
     });
 
@@ -302,7 +297,7 @@ contract("FundsForwarder", accounts => {
       const tx = await fundsForwarder.forward(erc20.address, {
         from: claimerAccount
       });
-      gasData["Forward Tokens tx"] = tx.receipt.gasUsed;
+      gasData["Forward fake ERC20 Tokens tx"] = tx.receipt.gasUsed;
       const forwarded = getEvent(tx.logs, "Forwarded");
       assert.equal(
         forwarded.args.balance.toString(),
@@ -332,6 +327,135 @@ contract("FundsForwarder", accounts => {
         },
         "Wrong event Donate arguments"
       );
+    });
+  });
+
+  /**
+   * DAI token interactions
+   */
+  describe("DAI token consecutive donation", () => {
+    before("Deploy DAI, mint and whitelist in the bridge", async () => {
+      dai = await InsecureDaiToken.new(web3.utils.asciiToHex("DAI", 32));
+      await dai.mint(maxValue, { from: donorAccount });
+      const balance = await dai.balanceOf(donorAccount).then(b => b.toString());
+      if (balance !== maxValue)
+        throw Error(`Wrong donor minted balance ${balance} == ${maxValue}`);
+      await bridge.whitelistToken(dai.address, true);
+    });
+
+    for (let i = 1; i <= 3; i++) {
+      it(`Should send tokens to the fundsForwarder - tx #${i}`, async () => {
+        const balanceDonor = await compareBalance(donorAccount, dai);
+        const balanceFundF = await compareBalance(fundsForwarder.address, dai);
+
+        const tx = await dai.transfer(fundsForwarder.address, donationValue, {
+          from: donorAccount
+        });
+
+        const balDonorDiff = await balanceDonor();
+        const balFundFDiff = await balanceFundF();
+        assert.equal(balDonorDiff, neg(donationValue), "Wrong donor balance");
+        assert.equal(balFundFDiff, donationValue, "Wrong fund f. balance");
+      });
+
+      it(`Should call forward and move the tokens to the bridge - tx #${i}`, async () => {
+        const balanceBridg = await compareBalance(bridge.address, dai);
+        const balanceFundF = await compareBalance(fundsForwarder.address, dai);
+
+        const tx = await fundsForwarder.forward(dai.address, {
+          from: claimerAccount
+        });
+        gasData[`Forward DAI Tokens tx #${i}`] = tx.receipt.gasUsed;
+        const forwarded = getEvent(tx.logs, "Forwarded");
+        assert.equal(
+          forwarded.args.balance.toString(),
+          donationValue,
+          "Wrong balance in Forwarded event"
+        );
+
+        const balBridgDiff = await balanceBridg();
+        const balFundFDiff = await balanceFundF();
+        assert.equal(balBridgDiff, donationValue, "Wrong bridge balance");
+        assert.equal(balFundFDiff, neg(donationValue), "Wrong fund f. balance");
+
+        const events = await bridge.getPastEvents("allEvents", lastBlock(tx));
+        const donate = getEvent(events, "Donate");
+        assert.deepEqual(
+          {
+            giverId: donate.args.giverId.toNumber(),
+            receiverId: donate.args.receiverId.toNumber(),
+            token: donate.args.token,
+            amount: donate.args.amount.toString()
+          },
+          {
+            giverId,
+            receiverId,
+            token: dai.address,
+            amount: donationValue
+          },
+          "Wrong event Donate arguments"
+        );
+      });
+    }
+  });
+
+  /**
+   * Multiple token forwarding
+   */
+  describe("Multiple token forwarding", () => {
+    before("Deploy ERC20, mint and whitelist in the bridge", async () => {
+      await fundsForwarder.send(donationValue, {
+        from: donorAccount
+      });
+      await erc20.transfer(fundsForwarder.address, donationValue, {
+        from: donorAccount
+      });
+      await dai.transfer(fundsForwarder.address, donationValue, {
+        from: donorAccount
+      });
+    });
+
+    it(`Should forward multiple tokens`, async () => {
+      const tokens = [
+        { name: "ETH", key: null, address: zeroAddress },
+        { name: "ERC20", key: erc20, address: erc20.address },
+        { name: "DAi", key: dai, address: dai.address }
+      ];
+      for (const token of tokens) {
+        token.balanceBridg = await compareBalance(bridge.address, token.key);
+        token.balanceFundF = await compareBalance(
+          fundsForwarder.address,
+          token.key
+        );
+      }
+
+      const tx = await fundsForwarder.forwardMultiple(
+        tokens.map(token => token.address),
+        { from: claimerAccount }
+      );
+      gasData["Forward multiple tokens tx"] = tx.receipt.gasUsed;
+
+      const events = await bridge.getPastEvents("allEvents", lastBlock(tx));
+
+      for (const token of tokens) {
+        const balBridgDiff = await token.balanceBridg();
+        const balFundFDiff = await token.balanceFundF();
+        assert.equal(balBridgDiff, donationValue, "Wrong bridge balance");
+        assert.equal(balFundFDiff, neg(donationValue), "Wrong fund f. balance");
+        // Check that there exists a Forwarded event
+        const forwardEvent = tx.logs.find(
+          event =>
+            event.event === "Forwarded" && event.args.token === token.address
+        );
+        assert.ok(forwardEvent, `Forwarded event not found for ${token.name}`);
+        // Check that there exists a Donate event
+        const donateEvent = events.find(
+          event =>
+            event.event === "Donate" &&
+            event.returnValues.token === token.address
+        );
+        assert.ok(donateEvent, `Donate event not found for ${token.name}`);
+      }
     });
   });
 

@@ -66,7 +66,7 @@ contract FundsForwarderFactory is Escapable, IsContract {
     */
     function newFundsForwarder(uint64 _giverId, uint64 _receiverId) public {
         address fundsForwarder = _deployMinimal(childImplementation);
-        FundsForwarder(fundsForwarder).initialize(address(this), _giverId, _receiverId);
+        FundsForwarder(fundsForwarder).initialize(_giverId, _receiverId);
 
         // Store a registry of fundForwarders as events
         emit NewFundForwarder(_giverId, _receiverId, fundsForwarder);

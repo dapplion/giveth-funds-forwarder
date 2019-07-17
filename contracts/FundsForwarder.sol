@@ -22,6 +22,7 @@ contract FundsForwarder {
     string private constant ERROR_DISALLOWED = "RECOVER_DISALLOWED";
     string private constant ERROR_TOKEN_TRANSFER = "RECOVER_TOKEN_TRANSFER";
     string private constant ERROR_ALREADY_INITIALIZED = "INIT_ALREADY_INITIALIZED";
+    uint private constant MAX_UINT = uint(-1);
 
     event Forwarded(address to, address token, uint balance, bool result);
     event EscapeHatchCalled(address token, uint amount);
@@ -40,25 +41,19 @@ contract FundsForwarder {
 
     /**
     * @dev Initialize can only be called once.
-    * @param _fundsForwarderFactory Contract address of the fundsForwarderFactory
-    *  This address should be a contract with three public getters:
+    * @notice msg.sender MUST be the _fundsForwarderFactory Contract
+    *  Its address must be a contract with three public getters:
     *  - bridge(): Returns the bridge address
     *  - escapeHatchCaller(): Returns the escapeHatchCaller address
-    *  - escapeHatchDestination(): Returns the escapeHatchDestination address
+    *  - escapeHatchDestination(): Returns the escashouldpeHatchDestination address
     * @param _giverId The adminId of the liquidPledging pledge admin who is donating
     * @param _receiverId The adminId of the liquidPledging pledge admin receiving the donation
     */
-    function initialize(
-        address _fundsForwarderFactory,
-        uint64 _giverId,
-        uint64 _receiverId
-    ) public
-    {
+    function initialize(uint64 _giverId, uint64 _receiverId) public {
         /// @dev onlyInit method from AragonOS's Initializable contract
         require(fundsForwarderFactory == address(0), ERROR_ALREADY_INITIALIZED);
         /// @dev Setting fundsForwarderFactory, serves as calling initialized()
-        require(_fundsForwarderFactory != address(0));
-        fundsForwarderFactory = FundsForwarderFactory(_fundsForwarderFactory);
+        fundsForwarderFactory = FundsForwarderFactory(msg.sender);
         /// @dev Make sure that the fundsForwarderFactory is a contact and has a bridge method
         require(fundsForwarderFactory.bridge() != address(0), ERROR_BRIDGE_CALL);
 
@@ -75,7 +70,7 @@ contract FundsForwarder {
         uint balance;
         bool result;
         /// @dev Logic for ether
-        if (_token == 0) {
+        if (_token == address(0)) {
             balance = address(this).balance;
             /// @dev Call donate() with two arguments, for tokens
             /// Low level .call must be used due to function overloading
@@ -89,7 +84,17 @@ contract FundsForwarder {
         } else {
             ERC20 token = ERC20(_token);
             balance = token.balanceOf(this);
-            require(token.approve(bridge, balance), ERROR_ERC20_APPROVE);
+            /// @dev Since the bridge is a trusted contract, the max allowance
+            ///  will be set on the first token transfer. Then it's skipped
+            ///  Numbers for DAI        First tx | n+1 txs
+            ///  approve(_, balance)      66356     51356
+            ///  approve(_, MAX_UINT)     78596     39103
+            ///                          +12240    -12253
+            ///  Worth it if forward is called more than once for each token
+            if (token.allowance(address(this), bridge) < balance) {
+                require(token.approve(bridge, MAX_UINT), ERROR_ERC20_APPROVE);
+            }
+
             /// @dev Call donate() with four arguments, for tokens
             /// Low level .call must be used due to function overloading
             /* solium-disable-next-line security/no-low-level-calls */
@@ -103,6 +108,17 @@ contract FundsForwarder {
         }
         require(result, ERROR_BRIDGE_CALL);
         emit Forwarded(bridge, _token, balance, result);
+    }
+
+    /**
+    * Transfer multiple tokens/eth to the bridge. Simplies UI interactions
+    * @param _tokens the array of tokens to transfer. 0x0 for ETH
+    */
+    function forwardMultiple(address[] _tokens) public {
+        uint tokensLength = _tokens.length;
+        for (uint i = 0; i < tokensLength; i++) {
+            forward(_tokens[i]);
+        }
     }
 
     /**
