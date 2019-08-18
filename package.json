@@ -7,12 +7,22 @@
     "test": "test"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "lint": "solium --dir ./contracts",
+    "test": "TRUFFLE_TEST=true npm run ganache-cli:test",
+    "test:gas": "GAS_REPORTER=true npm test",
+    "test:gas:ci": "npm run test:gas && npx codechecks",
+    "coverage": "SOLIDITY_COVERAGE=true npm run ganache-cli:test",
+    "ganache-cli:test": "scripts/ganache-cli.sh"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "dependencies": {
+  "dependencies": {},
+  "devDependencies": {
+    "coveralls": "^3.0.6",
+    "ganache-cli": "^6.6.0",
+    "solidity-coverage": "^0.6.4",
+    "solium": "^1.2.4",
     "truffle": "^5.0.21",
     "web3-utils": "^1.0.0-beta.55"
   }

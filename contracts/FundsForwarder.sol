@@ -1,9 +1,6 @@
 pragma solidity ^0.4.24;
 
 import "./lib/ERC20.sol";
-import "./lib/Escapable.sol";
-import "./lib/Initializable.sol";
-import "./lib/Autopetrified.sol";
 import "./FundsForwarderFactory.sol";
 
 interface IGivethBridge {

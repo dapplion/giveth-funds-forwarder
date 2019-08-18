@@ -1,0 +1,5 @@
+node_modules
+contracts/lib
+contracts/test-ERC20
+contracts/givethBridge
+contracts/Migrations.sol
