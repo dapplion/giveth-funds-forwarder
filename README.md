@@ -1,5 +1,8 @@
 # Giveth Funds Forwarder
 
+[![Build Status](https://travis-ci.com/dapplion/giveth-funds-forwarder.svg?branch=master)](https://travis-ci.com/dapplion/giveth-funds-forwarder)
+[![Coverage Status](https://coveralls.io/repos/github/dapplion/giveth-funds-forwarder/badge.svg)](https://coveralls.io/github/dapplion/giveth-funds-forwarder)
+
 Intermediate contract to allow donations from DAOs or other contracts to Giveth milestones via its bridge.
 
 ```
