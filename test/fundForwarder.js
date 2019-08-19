@@ -89,17 +89,26 @@ async function getContractDeployGas(contractInstance) {
 
 contract("FundsForwarder", accounts => {
   // Accounts
-  const bossAccount = accounts[0];
-  const campaignManagerAccount = accounts[1];
-  const donorAccount = accounts[2];
-  const claimerAccount = accounts[3];
-  const safeVaultAccount = accounts[9];
+  const tokenOwnerAccount = accounts[0];
+  const fundsForwarderFactoryDeployerAccount = accounts[1];
+  const campaignManagerAccount = accounts[2];
+  const donorAccount = accounts[3];
+  const claimerAccount = accounts[4];
+  const escapeHatchCaller = accounts[5];
+  const escapeHatchDestination = accounts[6];
+  const bridgeOwnerAccount = accounts[7];
+  const safeVaultAccount = accounts[8];
+  const securityGuard = accounts[9];
   console.log({
-    bossAccount,
+    fundsForwarderFactoryDeployerAccount,
     campaignManagerAccount,
     donorAccount,
     claimerAccount,
-    safeVaultAccount
+    escapeHatchCaller,
+    escapeHatchDestination,
+    bridgeOwnerAccount,
+    safeVaultAccount,
+    securityGuard
   });
 
   /**
@@ -118,11 +127,7 @@ contract("FundsForwarder", accounts => {
   let gasPrice = 1e9;
 
   // Giveth bridge params
-  // - Shared
-  const escapeHatchCaller = bossAccount;
-  const escapeHatchDestination = safeVaultAccount;
   // - Dedicated
-  const securityGuard = bossAccount;
   const absoluteMinTimeLock = 60 * 60 * 25;
   const timeLock = 60 * 60 * 48;
   const maxSecurityGuardDelay = 60 * 60 * 24 * 5;
@@ -147,7 +152,8 @@ contract("FundsForwarder", accounts => {
         absoluteMinTimeLock,
         timeLock,
         securityGuard,
-        maxSecurityGuardDelay
+        maxSecurityGuardDelay,
+        { from: bridgeOwnerAccount }
       );
 
       // FundsForwarderFactory deployment
@@ -155,7 +161,8 @@ contract("FundsForwarder", accounts => {
         bridge.address,
         escapeHatchCaller,
         escapeHatchDestination,
-        zeroAddress
+        zeroAddress,
+        { from: fundsForwarderFactoryDeployerAccount }
       );
       gasData["Deploy FundsForwarderFactory"] = await getContractDeployGas(
         fundsForwarderFactory
@@ -168,6 +175,41 @@ contract("FundsForwarder", accounts => {
       );
     }
   );
+
+  it("FundsForwarderFactory owner should be the bridge owner", async () => {
+    assert.equal(
+      await fundsForwarderFactory.owner(),
+      bridgeOwnerAccount,
+      "on FundsForwarderFactory"
+    );
+    assert.equal(await bridge.owner(), bridgeOwnerAccount, "on Bridge");
+  });
+
+  it("FundsForwarderFactory escapeHatchCaller should be the bridge escapeHatchCaller", async () => {
+    assert.equal(
+      await fundsForwarderFactory.escapeHatchCaller(),
+      escapeHatchCaller,
+      "on FundsForwarderFactory"
+    );
+    assert.equal(
+      await bridge.escapeHatchCaller(),
+      escapeHatchCaller,
+      "on Bridge"
+    );
+  });
+
+  it("FundsForwarderFactory escapeHatchDestination should be the bridge escapeHatchDestination", async () => {
+    assert.equal(
+      await fundsForwarderFactory.escapeHatchDestination(),
+      escapeHatchDestination,
+      "on FundsForwarderFactory"
+    );
+    assert.equal(
+      await bridge.escapeHatchDestination(),
+      escapeHatchDestination,
+      "on Bridge"
+    );
+  });
 
   it(`fundsForwarderLogic should be petrified`, async () => {
     const fundsForwarderFactoryAddress = await fundsForwarderLogic.fundsForwarderFactory();
@@ -285,14 +327,16 @@ contract("FundsForwarder", accounts => {
 
   describe("ERC20 token donation", () => {
     before("Deploy ERC20, mint and whitelist in the bridge", async () => {
-      erc20 = await ERC20Insecure.new();
-      await erc20.mint(donorAccount, maxValue);
+      erc20 = await ERC20Insecure.new({ from: tokenOwnerAccount });
+      await erc20.mint(donorAccount, maxValue, { from: tokenOwnerAccount });
       const balance = await erc20
         .balanceOf(donorAccount)
         .then(b => b.toString());
       if (balance !== maxValue)
         throw Error(`Wrong donor minted balance ${balance} == ${maxValue}`);
-      await bridge.whitelistToken(erc20.address, true);
+      await bridge.whitelistToken(erc20.address, true, {
+        from: bridgeOwnerAccount
+      });
     });
 
     it(`Should send tokens to the fundsForwarder`, async () => {
@@ -354,12 +398,16 @@ contract("FundsForwarder", accounts => {
    */
   describe("DAI token consecutive donation", () => {
     before("Deploy DAI, mint and whitelist in the bridge", async () => {
-      dai = await InsecureDaiToken.new(web3.utils.asciiToHex("DAI", 32));
+      dai = await InsecureDaiToken.new(web3.utils.asciiToHex("DAI", 32), {
+        from: tokenOwnerAccount
+      });
       await dai.mint(maxValue, { from: donorAccount });
       const balance = await dai.balanceOf(donorAccount).then(b => b.toString());
       if (balance !== maxValue)
         throw Error(`Wrong donor minted balance ${balance} == ${maxValue}`);
-      await bridge.whitelistToken(dai.address, true);
+      await bridge.whitelistToken(dai.address, true, {
+        from: bridgeOwnerAccount
+      });
     });
 
     for (let i = 1; i <= 3; i++) {
@@ -508,7 +556,7 @@ contract("FundsForwarder", accounts => {
       assert.equal(balFundFDiff, donationValue, "Wrong fund f. balance");
 
       await fundsForwarder.escapeHatch(zeroAddress, {
-        from: bossAccount
+        from: escapeHatchCaller
       });
 
       const balVaultDiff = await balanceVault();
@@ -516,7 +564,9 @@ contract("FundsForwarder", accounts => {
     });
 
     it(`Should recover tokens from the fundsForwarder`, async () => {
-      await erc20.mint(donorAccount, donationValue);
+      await erc20.mint(donorAccount, donationValue, {
+        from: tokenOwnerAccount
+      });
 
       const balanceVault = await compareBalance(escapeHatchDestination, erc20);
       const balanceFundF = await compareBalance(fundsForwarder.address, erc20);
@@ -529,7 +579,7 @@ contract("FundsForwarder", accounts => {
       assert.equal(balFundFDiff, donationValue, "Wrong fund f. balance");
 
       await fundsForwarder.escapeHatch(erc20.address, {
-        from: bossAccount
+        from: escapeHatchCaller
       });
 
       const balVaultDiff = await balanceVault();
@@ -537,6 +587,14 @@ contract("FundsForwarder", accounts => {
     });
 
     it(`Should not allow recover tokens to non escapeHatchCaller`, async () => {
+      await shouldRevertWithMessage(
+        () =>
+          fundsForwarder.escapeHatch(zeroAddress, {
+            from: fundsForwarderFactoryDeployerAccount
+          }),
+        "RECOVER_DISALLOWED"
+      );
+
       await shouldRevertWithMessage(
         () =>
           fundsForwarder.escapeHatch(zeroAddress, {
@@ -549,9 +607,13 @@ contract("FundsForwarder", accounts => {
 
   describe("FundsForwarderFactory additional functions", () => {
     let fundsForwarderFactory2;
+    const newBridgeAddress = zeroAddress;
+    const newChildImplementation = nonContractAddress;
+
     it("Should change the bridge to a new address", async () => {
-      const newBridgeAddress = zeroAddress;
-      const tx = await fundsForwarderFactory.changeBridge(newBridgeAddress);
+      const tx = await fundsForwarderFactory.changeBridge(newBridgeAddress, {
+        from: bridgeOwnerAccount
+      });
 
       const bridgeChangedEvent = getEvent(tx.logs, "BridgeChanged");
       assert.equal(
@@ -568,7 +630,22 @@ contract("FundsForwarder", accounts => {
       );
     });
 
+    it("Should not allow the fundsForwarderFactory deployer to change the bridge address", async () => {
+      await shouldRevertWithMessage(
+        () =>
+          fundsForwarderFactory.changeBridge(newBridgeAddress, {
+            from: fundsForwarderFactoryDeployerAccount
+          }),
+        "err_escapableInvalidCaller"
+      );
+    });
+
     it("Should not let create a new FundsForwarder with a 0x0 bridge address", async () => {
+      assert.equal(
+        await fundsForwarderFactory.bridge(),
+        zeroAddress,
+        "bridge address must be 0x0"
+      );
       await shouldRevertWithMessage(
         () =>
           fundsForwarderFactory.newFundsForwarder(giverId, receiverId, {
@@ -583,7 +660,8 @@ contract("FundsForwarder", accounts => {
         bridge.address,
         escapeHatchCaller,
         escapeHatchDestination,
-        fundsForwarderLogic.address
+        fundsForwarderLogic.address,
+        { from: fundsForwarderFactoryDeployerAccount }
       );
       assert.equal(
         await fundsForwarderFactory2.childImplementation(),
@@ -593,16 +671,9 @@ contract("FundsForwarder", accounts => {
     });
 
     it("Should change the childLogicImplementation of the FundsForwarderFactory", async () => {
-      const newChildImplementation = nonContractAddress;
-      fundsForwarderFactory2 = await FundsForwarderFactory.new(
-        bridge.address,
-        escapeHatchCaller,
-        escapeHatchDestination,
-        fundsForwarderLogic.address
-      );
-
       const tx = await fundsForwarderFactory2.changeChildImplementation(
-        newChildImplementation
+        newChildImplementation,
+        { from: bridgeOwnerAccount }
       );
 
       const childImplementationChangedEvent = getEvent(
@@ -621,6 +692,17 @@ contract("FundsForwarder", accounts => {
         "Child implementation was not changed"
       );
     });
+
+    it("Should not allow the fundsForwarderFactory deployer to change the childLogicImplementation address", async () => {
+      await shouldRevertWithMessage(
+        () =>
+          fundsForwarderFactory.changeChildImplementation(
+            newChildImplementation,
+            { from: fundsForwarderFactoryDeployerAccount }
+          ),
+        "err_escapableInvalidCaller"
+      );
+    });
   });
 
   describe("FundsForwarderFactory require conditions", () => {
@@ -631,7 +713,8 @@ contract("FundsForwarder", accounts => {
             nonContractAddress,
             escapeHatchCaller,
             escapeHatchDestination,
-            zeroAddress
+            zeroAddress,
+            { from: fundsForwarderFactoryDeployerAccount }
           ),
         "ERROR_NOT_A_CONTRACT"
       );
@@ -644,7 +727,8 @@ contract("FundsForwarder", accounts => {
             bridge.address,
             nonContractAddress,
             escapeHatchDestination,
-            zeroAddress
+            zeroAddress,
+            { from: fundsForwarderFactoryDeployerAccount }
           ),
         "ERROR_HATCH_CALLER"
       );
@@ -657,7 +741,8 @@ contract("FundsForwarder", accounts => {
             bridge.address,
             escapeHatchCaller,
             nonContractAddress,
-            zeroAddress
+            zeroAddress,
+            { from: fundsForwarderFactoryDeployerAccount }
           ),
         "ERROR_HATCH_DESTINATION"
       );

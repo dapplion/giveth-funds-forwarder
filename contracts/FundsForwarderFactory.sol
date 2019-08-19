@@ -41,6 +41,8 @@ contract FundsForwarderFactory is Escapable, IsContract {
         Escapable bridgeInstance = Escapable(_bridge);
         require(_escapeHatchCaller == bridgeInstance.escapeHatchCaller(), ERROR_HATCH_CALLER);
         require(_escapeHatchDestination == bridgeInstance.escapeHatchDestination(), ERROR_HATCH_DESTINATION);
+        // Set the owner to the same as in the bridge
+        changeOwnership(bridgeInstance.owner());
 
         // Deploy FundsForwarder
         if (_childImplementation == address(0)) {

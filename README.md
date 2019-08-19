@@ -182,7 +182,7 @@ Fetched dynamically
 
 | Action                                        | Gas cost  | Frequency                                          |
 | --------------------------------------------- | --------- | -------------------------------------------------- |
-| Deploy FundsForwarderFactory (w/ child logic) | 3,591,997 | Once                                               |
+| Deploy FundsForwarderFactory (w/ child logic) | 3,654,402 | Once                                               |
 | Deploy FundForwarder                          | 117,087   | Once for each applicable milestone                 |
 | Forward ETH to bridge                         | 39,297    | Every time each milestone requires the funds       |
 | Forward Tokens (DAI) to bridge                | 78,596    | First time each milestone requires the funds       |
@@ -190,3 +190,22 @@ Fetched dynamically
 | Forward multiple tokens (ETH, DAI, FAKEERC20) | 80,660    | -                                                  |
 
 Gas costs without proxy are: Deploy FundForwarder +1,317%, Forward ETH to bridge -2%, Forward Tokens to bridge -1%.
+
+## How to deploy
+
+Only one contract has to be deployed (`FundsForwarderFactory`), which will deploy the logic of the child contract and do all the setup actions.
+
+The flattened code of the contract is ready to be copy / pasted to remix and can be found in [flattened_contracts/FundsForwarderFactory.sol](flattened_contracts/FundsForwarderFactory.sol). If the code is re-compiled from source, use solidity version `0.4.24+commit.e67f0147` and enable the optimizer.
+
+The arguments for the constructor are:
+
+| Argument                 | Value                                                                                                                   |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| \_bridge                 | [`0x30f938fED5dE6e06a9A7Cd2Ac3517131C317B1E7`](https://etherscan.io/address/0x30f938fed5de6e06a9a7cd2ac3517131c317b1e7) |
+| \_escapeHatchCaller      | [`0x1e9F6746147E937E8E1C29180e15aF0bd5fd64bb`](https://etherscan.io/address/0x1e9f6746147e937e8e1c29180e15af0bd5fd64bb) |
+| \_escapeHatchDestination | [`0x16Fda2Fcc887Dd7Ac65c46Be144473067CfF8654`](https://etherscan.io/address/0x16fda2fcc887dd7ac65c46be144473067cff8654) |
+| \_childImplementation    | 0x0000000000000000000000000000000000000000                                                                              |
+
+**SECURITY NOTE**: The FundsForwarderFactory contract will immediately grant its ownership to the bridge owner. The address deploying the contract will have no special priviledges on the FundsForwarderFactory and FundsForwarders at any time.
+
+**RE-REPLOYMENT NOTE**: If you want to deploy a second FundsForwarderFactory contract and not re-deploy the childImplementation, you must pass its address as a contructor argument, and you should modify the FundsForwarder code from the FundsForwarderFactory to save around ~1,500,000 gas on deployment.
