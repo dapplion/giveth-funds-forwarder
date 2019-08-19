@@ -16,7 +16,7 @@ matrix:
   allow_failures:
     - env: TASK=test:gas:ci
 before_script:
-  - npm prune
+  - rm -rf node_modules/websocket/.git && npm prune
 script: "npm run $TASK"
 after_success:
   - cat coverage/lcov.info | ./node_modules/.bin/coveralls
