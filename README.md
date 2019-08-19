@@ -182,10 +182,9 @@ Fetched dynamically
 
 | Action                                        | Gas cost  | Frequency                                          |
 | --------------------------------------------- | --------- | -------------------------------------------------- |
-| Deploy FundsForwarderFactory                  | 2,087,308 | Once                                               |
-| Deploy FundsForwarder logic                   | 1,392,086 | Once                                               |
-| Deploy FundForwarder                          | 117,207   | Once for each applicable milestone                 |
-| Forward ETH to bridge                         | 39,291    | Every time each milestone requires the funds       |
+| Deploy FundsForwarderFactory (w/ child logic) | 3,591,997 | Once                                               |
+| Deploy FundForwarder                          | 117,087   | Once for each applicable milestone                 |
+| Forward ETH to bridge                         | 39,297    | Every time each milestone requires the funds       |
 | Forward Tokens (DAI) to bridge                | 78,596    | First time each milestone requires the funds       |
 | Forward Tokens (DAI) to bridge                | 39,103    | Every other time each milestone requires the funds |
 | Forward multiple tokens (ETH, DAI, FAKEERC20) | 80,660    | -                                                  |

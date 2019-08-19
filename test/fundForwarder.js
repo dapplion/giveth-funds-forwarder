@@ -132,6 +132,7 @@ contract("FundsForwarder", accounts => {
   const donationValue = web3.utils.toWei("0.1", "ether");
   const donationValueBn = toBN(donationValue);
   const zeroAddress = "0x0000000000000000000000000000000000000000";
+  const nonContractAddress = "0x89d24A6b4CcB1B6fAA2625fE562bDD9a23260359";
   const maxValue = toBN(2)
     .pow(toBN(255))
     .toString();
@@ -153,21 +154,17 @@ contract("FundsForwarder", accounts => {
       fundsForwarderFactory = await FundsForwarderFactory.new(
         bridge.address,
         escapeHatchCaller,
-        escapeHatchDestination
+        escapeHatchDestination,
+        zeroAddress
       );
-
-      // FundsForwarder logic deployment
-      fundsForwarderLogic = await FundsForwarder.new();
-      // Set child implementation in the FundsForwarderFactory
-      await fundsForwarderFactory.changeChildImplementation(
-        fundsForwarderLogic.address
-      );
-
       gasData["Deploy FundsForwarderFactory"] = await getContractDeployGas(
         fundsForwarderFactory
       );
-      gasData["Deploy FundsForwarder logic"] = await getContractDeployGas(
-        fundsForwarderLogic
+
+      // Get the fundsForwarderLogic address that was deployed
+      // in the FundsForwarderFactory constructor
+      fundsForwarderLogic = fundsForwarder = await FundsForwarder.at(
+        await fundsForwarderFactory.childImplementation()
       );
     }
   );
@@ -551,6 +548,7 @@ contract("FundsForwarder", accounts => {
   });
 
   describe("FundsForwarderFactory additional functions", () => {
+    let fundsForwarderFactory2;
     it("Should change the bridge to a new address", async () => {
       const newBridgeAddress = zeroAddress;
       const tx = await fundsForwarderFactory.changeBridge(newBridgeAddress);
@@ -579,17 +577,61 @@ contract("FundsForwarder", accounts => {
         "ERROR_BRIDGE_CALL"
       );
     });
+
+    it("Should deploy a FundsForwarderFactory with an existing child logic", async () => {
+      fundsForwarderFactory2 = await FundsForwarderFactory.new(
+        bridge.address,
+        escapeHatchCaller,
+        escapeHatchDestination,
+        fundsForwarderLogic.address
+      );
+      assert.equal(
+        await fundsForwarderFactory2.childImplementation(),
+        fundsForwarderLogic.address,
+        "Child implementation was not correctly set on the constructor"
+      );
+    });
+
+    it("Should change the childLogicImplementation of the FundsForwarderFactory", async () => {
+      const newChildImplementation = nonContractAddress;
+      fundsForwarderFactory2 = await FundsForwarderFactory.new(
+        bridge.address,
+        escapeHatchCaller,
+        escapeHatchDestination,
+        fundsForwarderLogic.address
+      );
+
+      const tx = await fundsForwarderFactory2.changeChildImplementation(
+        newChildImplementation
+      );
+
+      const childImplementationChangedEvent = getEvent(
+        tx.logs,
+        "ChildImplementationChanged"
+      );
+      assert.equal(
+        childImplementationChangedEvent.args.newChildImplementation,
+        newChildImplementation,
+        "Wrong newChildImplementation in Child Implementation Changed event"
+      );
+
+      assert.equal(
+        await fundsForwarderFactory2.childImplementation(),
+        newChildImplementation,
+        "Child implementation was not changed"
+      );
+    });
   });
 
   describe("FundsForwarderFactory require conditions", () => {
-    const nonContractAddress = "0x89d24A6b4CcB1B6fAA2625fE562bDD9a23260359";
     it("Should revert if pointing to a non contract bridge", async () => {
       await shouldRevertWithMessage(
         () =>
           FundsForwarderFactory.new(
             nonContractAddress,
             escapeHatchCaller,
-            escapeHatchDestination
+            escapeHatchDestination,
+            zeroAddress
           ),
         "ERROR_NOT_A_CONTRACT"
       );
@@ -601,7 +643,8 @@ contract("FundsForwarder", accounts => {
           FundsForwarderFactory.new(
             bridge.address,
             nonContractAddress,
-            escapeHatchDestination
+            escapeHatchDestination,
+            zeroAddress
           ),
         "ERROR_HATCH_CALLER"
       );
@@ -613,7 +656,8 @@ contract("FundsForwarder", accounts => {
           FundsForwarderFactory.new(
             bridge.address,
             escapeHatchCaller,
-            nonContractAddress
+            nonContractAddress,
+            zeroAddress
           ),
         "ERROR_HATCH_DESTINATION"
       );

@@ -31,7 +31,8 @@ contract FundsForwarderFactory is Escapable, IsContract {
     constructor(
         address _bridge,
         address _escapeHatchCaller,
-        address _escapeHatchDestination
+        address _escapeHatchDestination,
+        address _childImplementation
     ) Escapable(_escapeHatchCaller, _escapeHatchDestination) public {
         require(isContract(_bridge), ERROR_NOT_A_CONTRACT);
         bridge = _bridge;
@@ -40,6 +41,13 @@ contract FundsForwarderFactory is Escapable, IsContract {
         Escapable bridgeInstance = Escapable(_bridge);
         require(_escapeHatchCaller == bridgeInstance.escapeHatchCaller(), ERROR_HATCH_CALLER);
         require(_escapeHatchDestination == bridgeInstance.escapeHatchDestination(), ERROR_HATCH_DESTINATION);
+
+        // Deploy FundsForwarder
+        if (_childImplementation == address(0)) {
+            childImplementation = new FundsForwarder();
+        } else {
+            childImplementation = _childImplementation;
+        }
     }
 
     /**
