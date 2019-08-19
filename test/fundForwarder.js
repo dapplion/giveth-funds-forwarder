@@ -24,6 +24,31 @@ async function compareBalance(address, erc20) {
 }
 
 /**
+ * Test utility to assert a contract tx error
+ *
+ * @param {function} fn
+ * @param {string} message "INIT_ALREADY_INITIALIZED"
+ * The message will actually be expected to be:
+ * "Returned error: VM Exception while processing transaction: revert INIT_ALREADY_INITIALIZED -- Reason given: INIT_ALREADY_INITIALIZED.",
+ */
+async function shouldRevertWithMessage(fn, message) {
+  let errorMessage = "---did not throw---";
+  let didThrow = false;
+  try {
+    await fn();
+  } catch (e) {
+    didThrow = true;
+    errorMessage = e.message;
+  }
+  assert.equal(didThrow, true, "Function did not throw");
+  assert.equal(
+    errorMessage,
+    `Returned error: VM Exception while processing transaction: revert ${message} -- Reason given: ${message}.`,
+    "Wrong error message"
+  );
+}
+
+/**
  * Utility to get a log from a transaction
  * @param {object} logs, tx.logs or events
  * @param {string} eventName
@@ -157,16 +182,9 @@ contract("FundsForwarder", accounts => {
   });
 
   it(`fundsForwarderLogic should not be able to be initialized`, async () => {
-    let errorMessage;
-    try {
-      await fundsForwarderLogic.initialize(giverId, receiverId);
-    } catch (e) {
-      errorMessage = e.message;
-    }
-    assert.equal(
-      errorMessage,
-      "Returned error: VM Exception while processing transaction: revert INIT_ALREADY_INITIALIZED -- Reason given: INIT_ALREADY_INITIALIZED.",
-      "Wrong error message"
+    await shouldRevertWithMessage(
+      () => fundsForwarderLogic.initialize(giverId, receiverId),
+      "INIT_ALREADY_INITIALIZED"
     );
   });
 
@@ -191,16 +209,9 @@ contract("FundsForwarder", accounts => {
   });
 
   it(`fundsForwarder should not be able to be initialized twice`, async () => {
-    let errorMessage;
-    try {
-      await fundsForwarder.initialize(giverId, receiverId);
-    } catch (e) {
-      errorMessage = e.message;
-    }
-    assert.equal(
-      errorMessage,
-      "Returned error: VM Exception while processing transaction: revert INIT_ALREADY_INITIALIZED -- Reason given: INIT_ALREADY_INITIALIZED.",
-      "Wrong error message"
+    await shouldRevertWithMessage(
+      () => fundsForwarderLogic.initialize(giverId, receiverId),
+      "INIT_ALREADY_INITIALIZED"
     );
   });
 
@@ -529,26 +540,19 @@ contract("FundsForwarder", accounts => {
     });
 
     it(`Should not allow recover tokens to non escapeHatchCaller`, async () => {
-      let errorMessage = "---did not throw---";
-      try {
-        await fundsForwarder.escapeHatch(zeroAddress, {
-          from: donorAccount
-        });
-      } catch (e) {
-        errorMessage = e.message;
-      }
-      assert.equal(
-        errorMessage,
-        "Returned error: VM Exception while processing transaction: revert RECOVER_DISALLOWED -- Reason given: RECOVER_DISALLOWED.",
-        "Wrong error message"
+      await shouldRevertWithMessage(
+        () =>
+          fundsForwarder.escapeHatch(zeroAddress, {
+            from: donorAccount
+          }),
+        "RECOVER_DISALLOWED"
       );
     });
   });
 
   describe("FundsForwarderFactory additional functions", () => {
     it("Should change the bridge to a new address", async () => {
-      //
-      const newBridgeAddress = "0x89d24A6b4CcB1B6fAA2625fE562bDD9a23260359";
+      const newBridgeAddress = zeroAddress;
       const tx = await fundsForwarderFactory.changeBridge(newBridgeAddress);
 
       const bridgeChangedEvent = getEvent(tx.logs, "BridgeChanged");
@@ -563,6 +567,55 @@ contract("FundsForwarder", accounts => {
         currentBridge,
         newBridgeAddress,
         "bridge var was not set to newBridgeAddress"
+      );
+    });
+
+    it("Should not let create a new FundsForwarder with a 0x0 bridge address", async () => {
+      await shouldRevertWithMessage(
+        () =>
+          fundsForwarderFactory.newFundsForwarder(giverId, receiverId, {
+            from: campaignManagerAccount
+          }),
+        "ERROR_BRIDGE_CALL"
+      );
+    });
+  });
+
+  describe("FundsForwarderFactory require conditions", () => {
+    const nonContractAddress = "0x89d24A6b4CcB1B6fAA2625fE562bDD9a23260359";
+    it("Should revert if pointing to a non contract bridge", async () => {
+      await shouldRevertWithMessage(
+        () =>
+          FundsForwarderFactory.new(
+            nonContractAddress,
+            escapeHatchCaller,
+            escapeHatchDestination
+          ),
+        "ERROR_NOT_A_CONTRACT"
+      );
+    });
+
+    it("Should revert if given an incorrent escapeHatchCaller", async () => {
+      await shouldRevertWithMessage(
+        () =>
+          FundsForwarderFactory.new(
+            bridge.address,
+            nonContractAddress,
+            escapeHatchDestination
+          ),
+        "ERROR_HATCH_CALLER"
+      );
+    });
+
+    it("Should revert if given an incorrent escapeHatchDestination", async () => {
+      await shouldRevertWithMessage(
+        () =>
+          FundsForwarderFactory.new(
+            bridge.address,
+            escapeHatchCaller,
+            nonContractAddress
+          ),
+        "ERROR_HATCH_DESTINATION"
       );
     });
   });
