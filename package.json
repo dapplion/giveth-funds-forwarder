@@ -19,7 +19,9 @@
   "license": "ISC",
   "dependencies": {},
   "devDependencies": {
+    "@codechecks/client": "^0.1.6",
     "coveralls": "^3.0.6",
+    "eth-gas-reporter": "^0.2.10",
     "ganache-cli": "^6.6.0",
     "solidity-coverage": "^0.6.4",
     "solium": "^1.2.4",
