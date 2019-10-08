@@ -5,6 +5,7 @@ const GivethBridge = artifacts.require("GivethBridge");
 const ERC20Insecure = artifacts.require("ERC20Insecure");
 const InsecureDaiToken = artifacts.require("InsecureDSToken");
 const assert = require("assert");
+const fs = require("fs");
 const { BN, toBN } = web3.utils;
 
 /**
@@ -73,6 +74,20 @@ const lastBlock = tx => ({
   fromBlock: tx.receipt.blockNumber,
   toBlock: tx.receipt.blockNumber
 });
+
+/**
+ * Removes the initial "0x"
+ * @param {string} hexString
+ */
+const strip0x = hexString => hexString.replace("0x", "");
+
+/**
+ * Pause for `ms`
+ * @param {number} ms
+ */
+function pause(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 /**
  * Get the deploy gas cost of a contract instance
@@ -293,7 +308,7 @@ contract("FundsForwarder", accounts => {
       assert.equal(
         forwarded.args.balance.toString(),
         donationValue,
-        "Wrong balance in Forwarded event"
+        "Wrong value transfered in Forwarded event"
       );
 
       const balBridgDiff = await balanceBridg();
@@ -365,7 +380,7 @@ contract("FundsForwarder", accounts => {
       assert.equal(
         forwarded.args.balance.toString(),
         donationValue,
-        "Wrong balance in Forwarded event"
+        "Wrong value transfered in Forwarded event"
       );
 
       const balBridgDiff = await balanceBridg();
@@ -437,7 +452,7 @@ contract("FundsForwarder", accounts => {
         assert.equal(
           forwarded.args.balance.toString(),
           donationValue,
-          "Wrong balance in Forwarded event"
+          "Wrong value transfered in Forwarded event"
         );
 
         const balBridgDiff = await balanceBridg();
@@ -523,6 +538,333 @@ contract("FundsForwarder", accounts => {
         );
         assert.ok(donateEvent, `Donate event not found for ${token.name}`);
       }
+    });
+  });
+
+  describe("Moloch shares forwarding", () => {
+    // Define accounts, paralel to current account names
+    const [
+      molochSummoner,
+      secondMember,
+      fundingMember,
+      fundsForwarderMolochMockAddress
+    ] = accounts;
+
+    // Load actual deploy tx on mainnet for fidelity
+    const molochDaoDeployTxDataOriginal = fs.readFileSync(
+      "test/molochDaoDeployTx.txt",
+      "utf8"
+    );
+    const wethDeployTxDataOriginal = fs.readFileSync(
+      "test/wethDeployTx.txt",
+      "utf8"
+    );
+    const molochDaoAbi = require("./molochDaoAbi.json");
+    const wethAbi = require("./wethAbi.json");
+
+    // Current values in the MolochDAO
+    const proposalDeposit = web3.utils.toWei("10", "ether");
+    const processingReward = web3.utils.toWei("0.1", "ether");
+    const dilutionBound = "3";
+    // Custom values to speed up testing
+    const periodDuration = 1;
+    const votingPeriodLength = 1;
+    const gracePeriodLength = 0;
+    const abortWindow = 1;
+
+    /**
+     * Edits the tx data of a MolochDAO deploy modifying only
+     * the constructor arguments
+     *
+     * @param {address} _summoner First member of the DAO
+     * @param {address} _approvedToken WETH
+     * @param {number} _periodDuration (seconds, >0)
+     * @param {number} _votingPeriodLength Voting window (periods, >0)
+     * @param {number} _gracePeriodLength Abort window (periods)
+     * @param {number} _abortWindow Abort window (periods, >0)
+     * @param {number} _proposalDeposit Token (>=_processingReward)
+     * @param {number} _dilutionBound (>0)
+     * @param {number} _processingReward Token reward to the processing person
+     */
+    function getMolochDaoDeployTxData({ _summoner, _approvedToken }) {
+      const constructorData = web3.eth.abi.encodeParameters(
+        [
+          "address",
+          "address",
+          "uint256",
+          "uint256",
+          "uint256",
+          "uint256",
+          "uint256",
+          "uint256",
+          "uint256"
+        ],
+        [
+          _summoner,
+          _approvedToken,
+          periodDuration,
+          votingPeriodLength,
+          gracePeriodLength,
+          abortWindow,
+          proposalDeposit,
+          dilutionBound,
+          processingReward
+        ]
+      );
+      const constructorDataNo0x = constructorData.replace("0x", "");
+      return (
+        molochDaoDeployTxDataOriginal.slice(0, -constructorDataNo0x.length) +
+        constructorDataNo0x
+      );
+    }
+
+    let weth;
+    let wethERC20;
+    let molochDao;
+    let guildBankAddress;
+
+    before("Deploy WETH and the Moloch DAO", async () => {
+      // Deploy WETH, doesn't matter who deploys it (no owner or similar)
+      const wethTx = await web3.eth.sendTransaction({
+        from: molochSummoner,
+        data: wethDeployTxDataOriginal,
+        gas: 1500000,
+        gasPrice: 100000000000
+      });
+      weth = new web3.eth.Contract(wethAbi, wethTx.contractAddress);
+      // Use to check balance
+      wethERC20 = await ERC20Insecure.at(wethTx.contractAddress);
+      // Whitelist token in the bridge
+      await bridge.whitelistToken(wethERC20.address, true, {
+        from: bridgeOwnerAccount
+      });
+
+      // Deploy Moloch DAO
+      const molochDaoDeployTxData = getMolochDaoDeployTxData({
+        _summoner: molochSummoner,
+        _approvedToken: wethTx.contractAddress
+      });
+
+      const molochTx = await web3.eth.sendTransaction({
+        from: molochSummoner,
+        data: molochDaoDeployTxData,
+        gas: 5685070,
+        gasPrice: 100000000000
+      });
+      molochDao = new web3.eth.Contract(molochDaoAbi, molochTx.contractAddress);
+      guildBankAddress = await molochDao.methods.guildBank().call();
+    });
+
+    /**
+     * [HELPER] method to deposit and approve to WETH
+     * @param {string} from
+     * @param {string} value
+     */
+    async function depositAndApprove(from, value) {
+      await weth.methods.deposit().send({ from, value });
+      await weth.methods.approve(molochDao._address, value).send({ from });
+    }
+
+    /**
+     * [HELPER] Get the total shares of the deployed Moloch DAO
+     */
+    async function getTotalShares() {
+      return await molochDao.methods.totalShares().call();
+    }
+
+    /**
+     * [HELPER] Get the balance of an account on the deployed WETH
+     * @param {string} from
+     */
+    async function getWethBalance(from) {
+      return await weth.methods.balanceOf(from).call();
+    }
+
+    /**
+     * [HELPER] Completes the onboarding flow on the deployed Moloch DAO
+     * - Submit a proposal
+     * - Vote Yes on it
+     * - Process the proposal to mint shares to the new member
+     * @param {string} newMemberAddress "0x..."
+     * @param {string} tokenTribute "10000000000000"
+     * @param {number} sharesRequested 100
+     */
+    async function completeNewMemberProposal(
+      newMemberAddress,
+      tokenTribute,
+      sharesRequested
+    ) {
+      await depositAndApprove(molochSummoner, proposalDeposit);
+
+      // Should submit a proposal for a second member
+      const submitProposalTx = await molochDao.methods
+        .submitProposal(
+          newMemberAddress, // applicant
+          tokenTribute, // tokenTribute
+          sharesRequested, // sharesRequested
+          "Applicant Name" // details
+        )
+        .send({ from: molochSummoner, gas: 1500000 });
+
+      const submitProposalEvent = submitProposalTx.events.SubmitProposal;
+      if (!submitProposalEvent) throw Error("No SubmitProposal event");
+      const proposalIndex = submitProposalEvent.returnValues.proposalIndex;
+
+      // Should submit vote yes on the member proposal
+      let success = false;
+      while (!success) {
+        await pause(500);
+        try {
+          // uintVote, Yes: 1
+          await molochDao.methods
+            .submitVote(proposalIndex, 1)
+            .send({ from: molochSummoner, gas: 1500000 });
+          success = true;
+        } catch (e) {
+          // Wait and retry only if it reverted because the vote hasn't started
+          if (!e.message.includes("voting period has not started")) throw e;
+        }
+      }
+
+      // Should process proposal for the second member
+      await pause(1000);
+
+      const processProposalTx = await molochDao.methods
+        .processProposal(proposalIndex)
+        .send({ from: molochSummoner, gas: 1500000 });
+
+      const processProposalEvent = processProposalTx.events.ProcessProposal;
+      if (!processProposalEvent) throw Error("No ProcessProposal event");
+      assert.ok(
+        processProposalEvent.returnValues.didPass,
+        "Proposal did not pass"
+      );
+    }
+
+    describe("Test a normal user flow on the MolochDAO", () => {
+      const tokenTribute = web3.utils.toWei("100", "ether");
+      // Sub 1 share to compensate the summoner, to get round numbers
+      const sharesRequested = 100 - 1;
+      before("Get tokens", async () => {
+        // Mint and approve WETH first
+        await depositAndApprove(secondMember, tokenTribute);
+      });
+
+      it("Should complete a new member proposal", async () => {
+        await completeNewMemberProposal(
+          secondMember,
+          tokenTribute,
+          sharesRequested
+        );
+      });
+
+      it("Second member should ragequit", async () => {
+        await molochDao.methods
+          .ragequit(sharesRequested)
+          .send({ from: secondMember, gas: 1500000 });
+      });
+    });
+
+    describe("Grant shares to a FundsForwarder and then forward the underlying token", () => {
+      /**
+       * The only way to take money out of the Moloch DAO is calling
+       * `MolochDAO.ragequit(sharesToBurn)`
+       * which would call
+       * `guildBank.withdraw(msg.sender)`
+       * and in order for that to work
+       * `members[msg.sender].shares >= sharesToBurn`
+       *
+       * The members map is modified on processProposal where
+       * `members[proposal.applicant] = new Member()`
+       *
+       * The applicant is defined when on submitProposal where it has to:
+       * - `!= address(0)`
+       * - `approvedToken.transferFrom(applicant, address(this), tokenTribute)`
+       *
+       * The WETH token contract would consider a successful transferFrom when
+       * the from has 0 tokens if the amount transfered is also 0.
+       */
+
+      const requesting = {
+        tokenTribute: 0,
+        sharesRequested: 10
+      };
+      const funding = {
+        tokenTribute: web3.utils.toWei(String(5000 - 1), "ether"),
+        // Sub 1 share to compensate the summoner, to get round numbers
+        sharesRequested: 500 - 1 - requesting.sharesRequested
+      };
+      // Resulting transfer for shares requested
+      // Computed from the minting and burning of shares
+      const wethTransf = web3.utils.toWei(String(100), "ether");
+
+      before("Add funds to the Moloch DAO", async () => {
+        // Mint and approve WETH first
+        await depositAndApprove(fundingMember, funding.tokenTribute);
+        // Add funds to the Moloch DAO with a new member
+        await completeNewMemberProposal(
+          fundingMember,
+          funding.tokenTribute,
+          funding.sharesRequested
+        );
+      });
+
+      it("Should submit a proposal for a FundsForwarder contract", async () => {
+        await completeNewMemberProposal(
+          fundsForwarder.address,
+          requesting.tokenTribute,
+          requesting.sharesRequested
+        );
+      });
+
+      it("Should forward the funds with a ragequit", async () => {
+        const totalSharesBefore = await getTotalShares();
+        const balanceGuild = await compareBalance(guildBankAddress, wethERC20);
+        const balanceBridg = await compareBalance(bridge.address, wethERC20);
+        const balanceFundF = await compareBalance(
+          fundsForwarder.address,
+          wethERC20
+        );
+
+        const tx = await fundsForwarder.forwardMoloch(molochDao._address, {
+          from: claimerAccount
+        });
+        gasData["Forward Moloch DAO shares (WETH)"] = tx.receipt.gasUsed;
+        const forwarded = getEvent(tx.logs, "Forwarded");
+        assert.equal(
+          forwarded.args.balance.toString(),
+          wethTransf,
+          "Wrong value transfered in Forwarded event"
+        );
+
+        // 10 shares should be burned as they are requested by the requester
+        const totalSharesDiff = (await getTotalShares()) - totalSharesBefore;
+        const balGuildDiff = await balanceGuild();
+        const balBridgDiff = await balanceBridg();
+        const balFundFDiff = await balanceFundF();
+        assert.equal(totalSharesDiff, -10, "Wrong total shares diff");
+        assert.equal(balGuildDiff, neg(wethTransf), "Wrong guild bank balance");
+        assert.equal(balBridgDiff, wethTransf, "Wrong bridge balance");
+        assert.equal(balFundFDiff, "0", "Wrong fund f. balance");
+
+        const events = await bridge.getPastEvents("allEvents", lastBlock(tx));
+        const donate = getEvent(events, "Donate");
+        assert.deepEqual(
+          {
+            giverId: donate.args.giverId.toNumber(),
+            receiverId: donate.args.receiverId.toNumber(),
+            token: donate.args.token,
+            amount: donate.args.amount.toString()
+          },
+          {
+            giverId,
+            receiverId,
+            token: wethERC20.address,
+            amount: wethTransf
+          },
+          "Wrong event Donate arguments"
+        );
+      });
     });
   });
 
@@ -651,7 +993,22 @@ contract("FundsForwarder", accounts => {
           fundsForwarderFactory.newFundsForwarder(giverId, receiverId, {
             from: campaignManagerAccount
           }),
-        "ERROR_BRIDGE_CALL"
+        "ERROR_ZERO_BRIDGE"
+      );
+    });
+
+    it("Should not let to forward with a 0x0 bridge address", async () => {
+      assert.equal(
+        await fundsForwarderFactory.bridge(),
+        zeroAddress,
+        "bridge address must be 0x0"
+      );
+      await shouldRevertWithMessage(
+        () =>
+          fundsForwarder.forward(zeroAddress, {
+            from: claimerAccount
+          }),
+        "ERROR_ZERO_BRIDGE"
       );
     });
 

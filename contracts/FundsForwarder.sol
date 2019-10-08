@@ -13,6 +13,12 @@ interface IFundsForwarderFactory {
     function escapeHatchDestination() external returns (address);
 }
 
+interface IMolochDao {
+    function approvedToken() external returns (address);
+    function members(address member) external returns (address, uint256, bool, uint256);
+    function ragequit(uint sharesToBurn) external;
+}
+
 
 contract FundsForwarder {
     uint64 public receiverId;
@@ -21,12 +27,13 @@ contract FundsForwarder {
 
     string private constant ERROR_ERC20_APPROVE = "ERROR_ERC20_APPROVE";
     string private constant ERROR_BRIDGE_CALL = "ERROR_BRIDGE_CALL";
+    string private constant ERROR_ZERO_BRIDGE = "ERROR_ZERO_BRIDGE";
     string private constant ERROR_DISALLOWED = "RECOVER_DISALLOWED";
     string private constant ERROR_TOKEN_TRANSFER = "RECOVER_TOKEN_TRANSFER";
     string private constant ERROR_ALREADY_INITIALIZED = "INIT_ALREADY_INITIALIZED";
     uint private constant MAX_UINT = uint(-1);
 
-    event Forwarded(address to, address token, uint balance, bool result);
+    event Forwarded(address to, address token, uint balance);
     event EscapeHatchCalled(address token, uint amount);
 
     constructor() public {
@@ -56,8 +63,8 @@ contract FundsForwarder {
         require(fundsForwarderFactory == address(0), ERROR_ALREADY_INITIALIZED);
         /// @dev Setting fundsForwarderFactory, serves as calling initialized()
         fundsForwarderFactory = IFundsForwarderFactory(msg.sender);
-        /// @dev Make sure that the fundsForwarderFactory is a contact and has a bridge method
-        require(fundsForwarderFactory.bridge() != address(0), ERROR_BRIDGE_CALL);
+        /// @dev Make sure that the fundsForwarderFactory is a contract and has a bridge method
+        require(fundsForwarderFactory.bridge() != address(0), ERROR_ZERO_BRIDGE);
 
         receiverId = _receiverId;
         giverId = _giverId;
@@ -69,6 +76,8 @@ contract FundsForwarder {
     */
     function forward(address _token) public {
         IGivethBridge bridge = IGivethBridge(fundsForwarderFactory.bridge());
+        require(bridge != address(0), ERROR_ZERO_BRIDGE);
+
         uint balance;
         bool result;
         /// @dev Logic for ether
@@ -109,7 +118,7 @@ contract FundsForwarder {
             );
         }
         require(result, ERROR_BRIDGE_CALL);
-        emit Forwarded(bridge, _token, balance, result);
+        emit Forwarded(bridge, _token, balance);
     }
 
     /**
@@ -121,6 +130,17 @@ contract FundsForwarder {
         for (uint i = 0; i < tokensLength; i++) {
             forward(_tokens[i]);
         }
+    }
+
+    /**
+    * Transfer tokens from a Moloch DAO by calling ragequit on all shares
+    * @param _molochDao Address of a Moloch DAO
+    */
+    function forwardMoloch(address _molochDao) public {
+        IMolochDao molochDao = IMolochDao(_molochDao);
+        (,uint shares,,) = molochDao.members(address(this));
+        molochDao.ragequit(shares);
+        forward(molochDao.approvedToken());
     }
 
     /**
