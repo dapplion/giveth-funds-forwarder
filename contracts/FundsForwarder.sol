@@ -19,6 +19,11 @@ interface IMolochDao {
     function ragequit(uint sharesToBurn) external;
 }
 
+interface IWEth {
+    function withdraw(uint wad) external;
+    function balanceOf(address guy) external returns (uint);
+}
+
 
 contract FundsForwarder {
     uint64 public receiverId;
@@ -85,6 +90,7 @@ contract FundsForwarder {
             balance = address(this).balance;
             /// @dev Call donate() with two arguments, for tokens
             /// Low level .call must be used due to function overloading
+            /// keccak250("donate(uint64,uint64)") = bde60ac9
             /* solium-disable-next-line security/no-call-value */
             result = address(bridge).call.value(balance)(
                 0xbde60ac9,
@@ -108,6 +114,7 @@ contract FundsForwarder {
 
             /// @dev Call donate() with four arguments, for tokens
             /// Low level .call must be used due to function overloading
+            /// keccak256("donate(uint64,uint64,address,uint256)") = 4c4316c7
             /* solium-disable-next-line security/no-low-level-calls */
             result = address(bridge).call(
                 0x4c4316c7,
@@ -135,12 +142,20 @@ contract FundsForwarder {
     /**
     * Transfer tokens from a Moloch DAO by calling ragequit on all shares
     * @param _molochDao Address of a Moloch DAO
+    * @param _convertWeth Flag to indicate that this DAO uses WETH
     */
-    function forwardMoloch(address _molochDao) public {
+    function forwardMoloch(address _molochDao, bool _convertWeth) public {
         IMolochDao molochDao = IMolochDao(_molochDao);
         (,uint shares,,) = molochDao.members(address(this));
         molochDao.ragequit(shares);
-        forward(molochDao.approvedToken());
+        address approvedToken = molochDao.approvedToken();
+        if (_convertWeth) {
+            IWEth weth = IWEth(approvedToken);
+            weth.withdraw(weth.balanceOf(address(this)));
+            forward(address(0));
+        } else {
+            forward(molochDao.approvedToken());
+        }
     }
 
     /**

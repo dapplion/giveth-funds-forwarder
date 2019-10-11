@@ -543,12 +543,7 @@ contract("FundsForwarder", accounts => {
 
   describe("Moloch shares forwarding", () => {
     // Define accounts, paralel to current account names
-    const [
-      molochSummoner,
-      secondMember,
-      fundingMember,
-      fundsForwarderMolochMockAddress
-    ] = accounts;
+    const [molochSummoner, secondMember, fundingMember] = accounts;
 
     // Load actual deploy tx on mainnet for fidelity
     const molochDaoDeployTxDataOriginal = fs.readFileSync(
@@ -634,10 +629,7 @@ contract("FundsForwarder", accounts => {
       weth = new web3.eth.Contract(wethAbi, wethTx.contractAddress);
       // Use to check balance
       wethERC20 = await ERC20Insecure.at(wethTx.contractAddress);
-      // Whitelist token in the bridge
-      await bridge.whitelistToken(wethERC20.address, true, {
-        from: bridgeOwnerAccount
-      });
+      // ### NOTE: do NOT whitelist WETH, it should be transfered as ETH
 
       // Deploy Moloch DAO
       const molochDaoDeployTxData = getMolochDaoDeployTxData({
@@ -670,14 +662,6 @@ contract("FundsForwarder", accounts => {
      */
     async function getTotalShares() {
       return await molochDao.methods.totalShares().call();
-    }
-
-    /**
-     * [HELPER] Get the balance of an account on the deployed WETH
-     * @param {string} from
-     */
-    async function getWethBalance(from) {
-      return await weth.methods.balanceOf(from).call();
     }
 
     /**
@@ -820,15 +804,20 @@ contract("FundsForwarder", accounts => {
       it("Should forward the funds with a ragequit", async () => {
         const totalSharesBefore = await getTotalShares();
         const balanceGuild = await compareBalance(guildBankAddress, wethERC20);
-        const balanceBridg = await compareBalance(bridge.address, wethERC20);
-        const balanceFundF = await compareBalance(
+        const balanceBridg = await compareBalance(bridge.address);
+        const balanceFundF = await compareBalance(fundsForwarder.address);
+        const balanceFundFWeth = await compareBalance(
           fundsForwarder.address,
           wethERC20
         );
 
-        const tx = await fundsForwarder.forwardMoloch(molochDao._address, {
-          from: claimerAccount
-        });
+        const tx = await fundsForwarder.forwardMoloch(
+          molochDao._address,
+          true,
+          {
+            from: claimerAccount
+          }
+        );
         gasData["Forward Moloch DAO shares (WETH)"] = tx.receipt.gasUsed;
         const forwarded = getEvent(tx.logs, "Forwarded");
         assert.equal(
@@ -842,10 +831,12 @@ contract("FundsForwarder", accounts => {
         const balGuildDiff = await balanceGuild();
         const balBridgDiff = await balanceBridg();
         const balFundFDiff = await balanceFundF();
+        const balFundFDiffWeth = await balanceFundFWeth();
         assert.equal(totalSharesDiff, -10, "Wrong total shares diff");
         assert.equal(balGuildDiff, neg(wethTransf), "Wrong guild bank balance");
         assert.equal(balBridgDiff, wethTransf, "Wrong bridge balance");
-        assert.equal(balFundFDiff, "0", "Wrong fund f. balance");
+        assert.equal(balFundFDiff, "0", "Wrong fund f. ETH balance");
+        assert.equal(balFundFDiffWeth, "0", "Wrong fund f. WETH balance");
 
         const events = await bridge.getPastEvents("allEvents", lastBlock(tx));
         const donate = getEvent(events, "Donate");
@@ -859,7 +850,7 @@ contract("FundsForwarder", accounts => {
           {
             giverId,
             receiverId,
-            token: wethERC20.address,
+            token: zeroAddress,
             amount: wethTransf
           },
           "Wrong event Donate arguments"
