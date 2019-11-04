@@ -1,7 +1,7 @@
 
 // File: contracts/lib/ERC20.sol
 
-pragma solidity ^0.4.19;
+pragma solidity ^0.4.24;
 
 
 /**
@@ -36,8 +36,6 @@ contract ERC20 {
 
 // File: contracts/FundsForwarder.sol
 
-pragma solidity ^0.4.24;
-
 
 interface IGivethBridge {
     function donate(uint64 giverId, uint64 receiverId) external payable;
@@ -50,6 +48,17 @@ interface IFundsForwarderFactory {
     function escapeHatchDestination() external returns (address);
 }
 
+interface IMolochDao {
+    function approvedToken() external returns (address);
+    function members(address member) external returns (address, uint256, bool, uint256);
+    function ragequit(uint sharesToBurn) external;
+}
+
+interface IWEth {
+    function withdraw(uint wad) external;
+    function balanceOf(address guy) external returns (uint);
+}
+
 
 contract FundsForwarder {
     uint64 public receiverId;
@@ -58,12 +67,13 @@ contract FundsForwarder {
 
     string private constant ERROR_ERC20_APPROVE = "ERROR_ERC20_APPROVE";
     string private constant ERROR_BRIDGE_CALL = "ERROR_BRIDGE_CALL";
+    string private constant ERROR_ZERO_BRIDGE = "ERROR_ZERO_BRIDGE";
     string private constant ERROR_DISALLOWED = "RECOVER_DISALLOWED";
     string private constant ERROR_TOKEN_TRANSFER = "RECOVER_TOKEN_TRANSFER";
     string private constant ERROR_ALREADY_INITIALIZED = "INIT_ALREADY_INITIALIZED";
     uint private constant MAX_UINT = uint(-1);
 
-    event Forwarded(address to, address token, uint balance, bool result);
+    event Forwarded(address to, address token, uint balance);
     event EscapeHatchCalled(address token, uint amount);
 
     constructor() public {
@@ -93,8 +103,8 @@ contract FundsForwarder {
         require(fundsForwarderFactory == address(0), ERROR_ALREADY_INITIALIZED);
         /// @dev Setting fundsForwarderFactory, serves as calling initialized()
         fundsForwarderFactory = IFundsForwarderFactory(msg.sender);
-        /// @dev Make sure that the fundsForwarderFactory is a contact and has a bridge method
-        require(fundsForwarderFactory.bridge() != address(0), ERROR_BRIDGE_CALL);
+        /// @dev Make sure that the fundsForwarderFactory is a contract and has a bridge method
+        require(fundsForwarderFactory.bridge() != address(0), ERROR_ZERO_BRIDGE);
 
         receiverId = _receiverId;
         giverId = _giverId;
@@ -106,6 +116,8 @@ contract FundsForwarder {
     */
     function forward(address _token) public {
         IGivethBridge bridge = IGivethBridge(fundsForwarderFactory.bridge());
+        require(bridge != address(0), ERROR_ZERO_BRIDGE);
+
         uint balance;
         bool result;
         /// @dev Logic for ether
@@ -113,6 +125,7 @@ contract FundsForwarder {
             balance = address(this).balance;
             /// @dev Call donate() with two arguments, for tokens
             /// Low level .call must be used due to function overloading
+            /// keccak250("donate(uint64,uint64)") = bde60ac9
             /* solium-disable-next-line security/no-call-value */
             result = address(bridge).call.value(balance)(
                 0xbde60ac9,
@@ -136,6 +149,7 @@ contract FundsForwarder {
 
             /// @dev Call donate() with four arguments, for tokens
             /// Low level .call must be used due to function overloading
+            /// keccak256("donate(uint64,uint64,address,uint256)") = 4c4316c7
             /* solium-disable-next-line security/no-low-level-calls */
             result = address(bridge).call(
                 0x4c4316c7,
@@ -146,7 +160,7 @@ contract FundsForwarder {
             );
         }
         require(result, ERROR_BRIDGE_CALL);
-        emit Forwarded(bridge, _token, balance, result);
+        emit Forwarded(bridge, _token, balance);
     }
 
     /**
@@ -157,6 +171,25 @@ contract FundsForwarder {
         uint tokensLength = _tokens.length;
         for (uint i = 0; i < tokensLength; i++) {
             forward(_tokens[i]);
+        }
+    }
+
+    /**
+    * Transfer tokens from a Moloch DAO by calling ragequit on all shares
+    * @param _molochDao Address of a Moloch DAO
+    * @param _convertWeth Flag to indicate that this DAO uses WETH
+    */
+    function forwardMoloch(address _molochDao, bool _convertWeth) public {
+        IMolochDao molochDao = IMolochDao(_molochDao);
+        (,uint shares,,) = molochDao.members(address(this));
+        molochDao.ragequit(shares);
+        address approvedToken = molochDao.approvedToken();
+        if (_convertWeth) {
+            IWEth weth = IWEth(approvedToken);
+            weth.withdraw(weth.balanceOf(address(this)));
+            forward(address(0));
+        } else {
+            forward(molochDao.approvedToken());
         }
     }
 

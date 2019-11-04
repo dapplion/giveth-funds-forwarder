@@ -3,6 +3,8 @@
 [![Build Status](https://travis-ci.com/dapplion/giveth-funds-forwarder.svg?branch=master)](https://travis-ci.com/dapplion/giveth-funds-forwarder)
 [![Coverage Status](https://coveralls.io/repos/github/dapplion/giveth-funds-forwarder/badge.svg)](https://coveralls.io/github/dapplion/giveth-funds-forwarder)
 
+[Mainnet deploy &#x2197;](https://etherscan.io/address/0xa04d4f31c2aaceae21279f4c1143741625d79efb#code)
+
 Intermediate contract to allow donations from DAOs or other contracts to Giveth milestones via its bridge.
 
 ```
@@ -51,10 +53,12 @@ async function createDonationAddress() {
 }
 ```
 
-**Address**
+**Address** ([etherscan](https://etherscan.io/address/0xa04d4f31c2aaceae21279f4c1143741625d79efb#code))
+
+Main mainnet deploy. Notice that there can be multiple factories.
 
 ```
-TBA
+0xA04D4F31c2aAcEAe21279f4C1143741625D79eFb
 ```
 
 **ABI**
